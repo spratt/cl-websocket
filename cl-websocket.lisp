@@ -166,13 +166,137 @@ the packet and the cadr is the body of the packet."
 		 #(#\Newline) #(#\Newline)
 		 body)))
 
-
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-;;; Test Code                                                               ;;;
+;;; Internal Tests                                                          ;;;
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
-(setf *testpacket1*
-      "GET /demo HTTP/1.1
+(ql:quickload "lisp-unit")
+
+(use-package :lisp-unit)
+
+(define-test split-string
+  (assert-equal
+   (split-string "Host: example.com")
+   ;; Expected:
+   '("Host:" "example.com"))
+  
+  (assert-equal
+   (split-string "GET /demo HTTP/1.1" :max 1)
+   ;; Expected:
+   '("GET" "/demo HTTP/1.1"))
+  
+  (assert-equal
+   (split-string
+    "GET /demo HTTP/1.1
+Host: example.com
+Connection: Upgrade
+Sec-WebSocket-Key2: 12998 5 Y3 1  .P00
+Sec-WebSocket-Protocol: sample
+Upgrade: WebSocket
+Sec-WebSocket-Key1: 4 @1  46546xW%0l 1 5
+Origin: http://example.com"
+    :delimiter #(#\Newline))
+   ;; Expected:
+   '("GET /demo HTTP/1.1" "Host: example.com" "Connection: Upgrade" "Sec-WebSocket-Key2: 12998 5 Y3 1  .P00" "Sec-WebSocket-Protocol: sample" "Upgrade: WebSocket" "Sec-WebSocket-Key1: 4 @1  46546xW%0l 1 5" "Origin: http://example.com"))
+  
+  (assert-equal
+   (split-string
+    "GET /demo HTTP/1.1
+Host: example.com
+Connection: Upgrade
+Sec-WebSocket-Key2: 12998 5 Y3 1  .P00
+Sec-WebSocket-Protocol: sample
+Upgrade: WebSocket
+Sec-WebSocket-Key1: 4 @1  46546xW%0l 1 5
+Origin: http://example.com
+
+^n:ds[4U"
+    :delimiter #(#\Newline #\Newline)
+    :max 1)
+   ;; Expected:
+   '("GET /demo HTTP/1.1
+Host: example.com
+Connection: Upgrade
+Sec-WebSocket-Key2: 12998 5 Y3 1  .P00
+Sec-WebSocket-Protocol: sample
+Upgrade: WebSocket
+Sec-WebSocket-Key1: 4 @1  46546xW%0l 1 5
+Origin: http://example.com" "^n:ds[4U")))
+
+(define-test parse-header
+  (assert-equal
+   (parse-header "GET /demo HTTP/1.1
+Host: example.com
+Connection: Upgrade
+Sec-WebSocket-Key2: 12998 5 Y3 1  .P00
+Sec-WebSocket-Protocol: sample
+Upgrade: WebSocket
+Sec-WebSocket-Key1: 4 @1  46546xW%0l 1 5
+Origin: http://example.com")
+   ;; Expected:
+   '(("GET" "/demo HTTP/1.1")
+     ("Host:" "example.com")
+     ("Connection:" "Upgrade")
+     ("Sec-WebSocket-Key2:" "12998 5 Y3 1  .P00")
+     ("Sec-WebSocket-Protocol:" "sample")
+     ("Upgrade:" "WebSocket")
+     ("Sec-WebSocket-Key1:" "4 @1  46546xW%0l 1 5")
+     ("Origin:" "http://example.com"))))
+
+(define-test get-field
+  (assert-equal
+   (get-field '(("GET" "/demo HTTP/1.1")
+		("Host:" "example.com")
+		("Connection:" "Upgrade")
+		("Sec-WebSocket-Key2:" "12998 5 Y3 1  .P00")
+		("Sec-WebSocket-Protocol:" "sample")
+		("Upgrade:" "WebSocket")
+		("Sec-WebSocket-Key1:" "4 @1  46546xW%0l 1 5")
+		("Origin:" "http://example.com"))
+	      "Upgrade")
+   ;; Expected:
+   "WebSocket"))
+
+(define-test parse-number
+  (assert-equal
+   (parse-number "12998 5 Y3 1  .P00")
+   ;; Expected:
+   259970620))
+
+(define-test number-to-bytes
+  (assert-equalp ; must use equalp for arrays
+   (number-to-bytes 259970620)
+   ;; Expected:
+   #(15 126 214 60)))
+
+(define-test string-to-bytes
+  (assert-equalp
+   (string-to-bytes "^n:ds[4U")
+   ;; Expected:
+   #(94 110 58 100 115 91 52 85)))
+
+(define-test bytes-to-string
+  (assert-equal
+   (bytes-to-string #(94 110 58 100 115 91 52 85))
+   ;; Expected:
+   "^n:ds[4U"))
+
+(define-test cat-byte-array
+  (assert-equalp
+   (cat-byte-array #(94 110 58 100 115 91 52 85)
+		   #(94 110 58 100 115 91 52 85))
+   ;; Expected:
+   #(94 110 58 100 115 91 52 85 94 110 58 100 115 91 52 85)))
+
+(define-test handshake-reply
+  (assert-equal
+   (handshake-reply 829309203 259970620 "^n:ds[4U")
+   ;; Expected:
+   "8jKS'y:G*Co,Wxa-"))
+
+(define-test parse-packet
+  (assert-equal
+   (parse-packet "GET /demo HTTP/1.1
 Host: example.com
 Connection: Upgrade
 Sec-WebSocket-Key2: 12998 5 Y3 1  .P00
@@ -182,11 +306,40 @@ Sec-WebSocket-Key1: 4 @1  46546xW%0l 1 5
 Origin: http://example.com
 
 ^n:ds[4U")
+   ;; Expected:
+   '("GET /demo HTTP/1.1
+Host: example.com
+Connection: Upgrade
+Sec-WebSocket-Key2: 12998 5 Y3 1  .P00
+Sec-WebSocket-Protocol: sample
+Upgrade: WebSocket
+Sec-WebSocket-Key1: 4 @1  46546xW%0l 1 5
+Origin: http://example.com" "^n:ds[4U")))
 
-;; Handshake response should be: "8jKS'y:G*Co,Wxa-"
+(define-test server-response
+  (assert-equal
+   (server-response "GET /demo HTTP/1.1
+Host: example.com
+Connection: Upgrade
+Sec-WebSocket-Key2: 12998 5 Y3 1  .P00
+Sec-WebSocket-Protocol: sample
+Upgrade: WebSocket
+Sec-WebSocket-Key1: 4 @1  46546xW%0l 1 5
+Origin: http://example.com
 
-(setf *testpacket2*
-      "GET /demo HTTP/1.1
+^n:ds[4U")
+   ;; Expected:
+   "HTTP/1.1 101 WebSocket Protocol Handshake
+Upgrade: WebSocket
+Connection: Upgrade
+Sec-WebSocket-Origin: http://example.com
+Sec-WebSocket-Location: ws://example.com
+Sec-WebSocket-Protocol: sample
+
+8jKS'y:G*Co,Wxa-")
+
+  (assert-equal
+   (server-response "GET /demo HTTP/1.1
 Host: example.com
 Connection: Upgrade
 Sec-WebSocket-Key2: 1_ tx7X d  <  nw  334J702) 7]o}` 0
@@ -196,5 +349,12 @@ Sec-WebSocket-Key1: 18x 6]8vM;54 *(5:  {   U1]8  z [  8
 Origin: http://example.com
 
 Tm[K T2u")
+   ;; Expected:
+   "HTTP/1.1 101 WebSocket Protocol Handshake
+Upgrade: WebSocket
+Connection: Upgrade
+Sec-WebSocket-Origin: http://example.com
+Sec-WebSocket-Location: ws://example.com
+Sec-WebSocket-Protocol: sample
 
-;; Handshake response should be: "fQJ,fN/4F4!~K~MH"
+fQJ,fN/4F4!~K~MH"))
